@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  php:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: currency_converter_php
+    volumes:
+      - ./:/srv/app:delegated
+    ports:
+      - "8080:80"       # Map host port 8080 → container port 80
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
