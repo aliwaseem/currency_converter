@@ -4,8 +4,12 @@
 
 namespace App\Tests\Api;
 
+use App\Entity\ApiKey;
+use App\Repository\ApiKeyRepository;
+use Doctrine\ORM\EntityManagerInterface;
 use GuzzleHttp\Client;
 use PHPUnit\Framework\TestCase;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
 /**
  * API tests for the currency conversion endpoint.
@@ -15,25 +19,62 @@ use PHPUnit\Framework\TestCase;
  * and error handling.
  * 
  * @property Client $client The HTTP client used for making API requests
+ * @property string $apiKey The API key used for authentication
  */
-class ConversionApiTest extends TestCase
+class ConversionApiTest extends KernelTestCase
 {
     private Client $client;
+    private string $apiKey;
+    private EntityManagerInterface $entityManager;
 
     /**
      * Set up the test environment before each test.
      * 
      * Initializes the HTTP client with the base URI and configuration
      * to handle API requests without throwing exceptions for error responses.
+     * Creates a test API key for authentication.
      * 
      * @return void
      */
     protected function setUp(): void
     {
+        // Load environment variables from .env
+        if (file_exists(dirname(__DIR__, 2) . '/.env')) {
+            (new \Symfony\Component\Dotenv\Dotenv())->bootEnv(dirname(__DIR__, 2) . '/.env');
+        }
+        self::bootKernel();
+        $this->entityManager = self::getContainer()->get(EntityManagerInterface::class);
+
         $this->client = new Client([
             'base_uri' => 'http://localhost:80', 
             'http_errors' => false, // Don't throw exceptions for 4xx/5xx responses
         ]);
+
+        // Create a test API key
+        $apiKey = new ApiKey();
+        $apiKey->setName('Test API Key');
+        $this->entityManager->persist($apiKey);
+        $this->entityManager->flush();
+        $this->apiKey = $apiKey->getKey();
+    }
+
+    /**
+     * Clean up after each test.
+     * 
+     * Removes the test API key from the database.
+     * 
+     * @return void
+     */
+    protected function tearDown(): void
+    {
+        $apiKeyRepository = $this->entityManager->getRepository(ApiKey::class);
+        $apiKey = $apiKeyRepository->findActiveByKey($this->apiKey);
+        if ($apiKey) {
+            $this->entityManager->remove($apiKey);
+            $this->entityManager->flush();
+        }
+
+        parent::tearDown();
     }
 
     /**
@@ -52,6 +93,9 @@ class ConversionApiTest extends TestCase
                 'sourceCurrency' => 'USD',
                 'destinationCurrency' => 'EUR',
                 'sourceAmount' => 100.00
+            ],
+            'headers' => [
+                'X-API-Key' => $this->apiKey
             ]
         ]);
 
@@ -80,6 +124,9 @@ class ConversionApiTest extends TestCase
                 'sourceCurrency' => 'USD',
                 'destinationCurrency' => 'EUR',
                 'sourceAmount' => -100.00
+            ],
+            'headers' => [
+                'X-API-Key' => $this->apiKey
             ]
         ]);
 
@@ -106,6 +153,9 @@ class ConversionApiTest extends TestCase
                 'sourceCurrency' => 'USD',
                 'destinationCurrency' => 'INVALID',
                 'sourceAmount' => 100.00
+            ],
+            'headers' => [
+                'X-API-Key' => $this->apiKey
             ]
         ]);
 
@@ -129,6 +179,9 @@ class ConversionApiTest extends TestCase
             'json' => [
                 'sourceCurrency' => 'USD'
                 // Missing destinationCurrency and sourceAmount
+            ],
+            'headers' => [
+                'X-API-Key' => $this->apiKey
             ]
         ]);
 
@@ -138,5 +191,55 @@ class ConversionApiTest extends TestCase
         $this->assertEquals('Validation failed', $data['message']);
         $this->assertArrayHasKey('destinationCurrency', $data['errors']);
         $this->assertArrayHasKey('sourceAmount', $data['errors']);
+    }
+
+    /**
+     * Test unauthorized access without API key.
+     * 
+     * Verifies that requests without an API key are rejected with a 401 status code.
+     * 
+     * @return void
+     */
+    public function testUnauthorizedAccess(): void
+    {
+        $response = $this->client->post('/api/v1/convert', [
+            'json' => [
+                'sourceCurrency' => 'USD',
+                'destinationCurrency' => 'EUR',
+                'sourceAmount' => 100.00
+            ]
+            // No API key header
+        ]);
+
+        $this->assertEquals(401, $response->getStatusCode());
+        
+        $data = json_decode($response->getBody(), true);
+        $this->assertEquals('API key is required', $data['message']);
+    }
+
+    /**
+     * Test unauthorized access with invalid API key.
+     * 
+     * Verifies that requests with an invalid API key are rejected with a 401 status code.
+     * 
+     * @return void
+     */
+    public function testInvalidApiKey(): void
+    {
+        $response = $this->client->post('/api/v1/convert', [
+            'json' => [
+                'sourceCurrency' => 'USD',
+                'destinationCurrency' => 'EUR',
+                'sourceAmount' => 100.00
+            ],
+            'headers' => [
+                'X-API-Key' => 'invalid-api-key'
+            ]
+        ]);
+
+        $this->assertEquals(401, $response->getStatusCode());
+        
+        $data = json_decode($response->getBody(), true);
+        $this->assertEquals('Invalid API key', $data['message']);
     }
 } 
