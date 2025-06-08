@@ -3,124 +3,116 @@
 // src/Service/CurrencyConverterService.php
 
 namespace App\Service;
+
+use App\Entity\Currency;
+use App\Entity\ExchangeRate;
 use App\Exception\CurrencyNotFoundException;
+use App\Repository\CurrencyRepository;
+use App\Repository\ExchangeRateRepository;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\Intl\Currencies;
 
 /**
- * Service for handling currency conversions using exchange rates from a CSV file.
+ * Service for handling currency conversions using exchange rates from the database.
  * 
- * This service provides functionality to:
- * - Load exchange rates from a CSV file
- * - Convert amounts between different currencies
- * - Calculate exchange rates between currency pairs
- * 
- * The CSV file should contain columns:
- * - "Currency Code": The ISO 4217 currency code
- * - "Currency units per £1": The exchange rate relative to GBP
+ * This service provides methods to convert amounts between different currencies
+ * using exchange rates stored in the database.
  */
 class CurrencyConverterService
 {
-    /**
-     * @var array<string, float> Cache of currency codes to their exchange rates
-     */
-    private array $exchangeRates = [];
-
-    /**
-     * @param string $ratesFilePath Path to the CSV file containing exchange rates
-     * 
-     * @throws \RuntimeException If the exchange rates file cannot be read or opened
-     */
-    public function __construct(private string $ratesFilePath)
-    {
-        $this->loadExchangeRatesFromCsv();
+    public function __construct(
+        private readonly CurrencyRepository $currencyRepository,
+        private readonly ExchangeRateRepository $exchangeRateRepository,
+        private readonly LoggerInterface $logger
+    ) {
     }
 
     /**
-     * Loads exchange rates from the configured CSV file.
-     * 
-     * The CSV file should have a header row with columns:
-     * - "Currency Code"
-     * - "Currency units per £1"
-     * 
-     * @throws \RuntimeException If the file cannot be read, opened, or has invalid format
+     * Get the exchange rate between two currencies.
+     *
+     * @param string $sourceCurrencyCode The source currency code
+     * @param string $destinationCurrencyCode The destination currency code
+     * @return float The exchange rate
+     * @throws CurrencyNotFoundException If either currency is not found
      */
-    private function loadExchangeRatesFromCsv(): void
+    public function getRate(string $sourceCurrencyCode, string $destinationCurrencyCode): float
     {
-        if (!is_readable($this->ratesFilePath)) {
-            throw new \RuntimeException("Exchange rates file not found: " . $this->ratesFilePath);
+        $this->logger->info('Getting exchange rate', [
+            'source' => $sourceCurrencyCode,
+            'destination' => $destinationCurrencyCode,
+            'time' => (new \DateTime())->format('Y-m-d H:i:s')
+        ]);
+
+        // Get source currency
+        $sourceCurrency = $this->currencyRepository->findByCode($sourceCurrencyCode);
+        if (!$sourceCurrency) {
+            throw new CurrencyNotFoundException(sprintf('Source currency "%s" not found', $sourceCurrencyCode));
         }
 
-        $handle = fopen($this->ratesFilePath, 'r');
-
-        if ($handle === false) {
-            throw new \RuntimeException("Failed to open exchange rates file: " . $this->ratesFilePath);
+        // Get destination currency
+        $destinationCurrency = $this->currencyRepository->findByCode($destinationCurrencyCode);
+        if (!$destinationCurrency) {
+            throw new CurrencyNotFoundException(sprintf('Destination currency "%s" not found', $destinationCurrencyCode));
         }
 
-        $header = fgetcsv($handle);
-        $currencyIndex = array_search('Currency Code', $header);
-        $unitsIndex = array_search('Currency units per �1', $header);
-
-        if ($currencyIndex === false || $unitsIndex === false) {
-            throw new \RuntimeException("Required columns not found in CSV file");
-        }
-
-        while (($row = fgetcsv($handle)) !== false) {
-            $code = strtoupper(trim($row[$currencyIndex]));
-            $units = (float) str_replace(',', '', $row[$unitsIndex]);
-            if ($units > 0) {  // Only add non-zero rates
-                $this->exchangeRates[$code] = $units;
+        // Special handling for GBP
+        if ($sourceCurrencyCode === 'GBP') {
+            $destinationRate = $this->exchangeRateRepository->findCurrentRate($destinationCurrency);
+            if (!$destinationRate) {
+                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $destinationCurrencyCode));
             }
+            return (float) $destinationRate->getUnitsPerGbp();
         }
 
-        fclose($handle);
+        if ($destinationCurrencyCode === 'GBP') {
+            $sourceRate = $this->exchangeRateRepository->findCurrentRate($sourceCurrency);
+            if (!$sourceRate) {
+                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $sourceCurrencyCode));
+            }
+            return 1 / (float) $sourceRate->getUnitsPerGbp();
+        }
+
+        // Get rates for both currencies
+        $sourceRate = $this->exchangeRateRepository->findCurrentRate($sourceCurrency);
+        if (!$sourceRate) {
+            throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $sourceCurrencyCode));
+        }
+
+        $destinationRate = $this->exchangeRateRepository->findCurrentRate($destinationCurrency);
+        if (!$destinationRate) {
+            throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $destinationCurrencyCode));
+        }
+
+        // Calculate cross rate
+        return (float) $destinationRate->getUnitsPerGbp() / (float) $sourceRate->getUnitsPerGbp();
     }
 
     /**
-     * Gets the exchange rate between two currencies.
-     * 
-     * @param string $sourceCurrency The source currency code (e.g., "USD")
-     * @param string $destinationCurrency The destination currency code (e.g., "EUR")
-     * 
-     * @return float The exchange rate from source to destination currency
-     * 
-     * @throws CurrencyNotFoundException If either currency code is not supported
+     * Convert an amount from one currency to another.
+     *
+     * @param string $sourceCurrencyCode The source currency code
+     * @param string $destinationCurrencyCode The destination currency code
+     * @param float $amount The amount to convert
+     * @return array{destination_amount: float, exchange_rate: float} Array containing the converted amount and the exchange rate used
+     * @throws CurrencyNotFoundException If either currency is not found
      */
-    public function getRate(string $sourceCurrency, string $destinationCurrency): float
+    public function convert(string $sourceCurrencyCode, string $destinationCurrencyCode, float $amount): array
     {
-        if (!isset($this->exchangeRates[$sourceCurrency]) || !isset($this->exchangeRates[$destinationCurrency])) {
-            throw new CurrencyNotFoundException("Currency not found: $sourceCurrency or $destinationCurrency");
-        }
-
-        return $this->exchangeRates[$destinationCurrency] / $this->exchangeRates[$sourceCurrency];
-    }
-
-    /**
-     * Converts an amount from one currency to another.
-     * 
-     * @param string $sourceCurrency The source currency code (e.g., "USD")
-     * @param string $destinationCurrency The destination currency code (e.g., "EUR")
-     * @param float $sourceAmount The amount to convert
-     * 
-     * @return array{
-     *     source_currency: string,
-     *     destination_currency: string,
-     *     source_amount: float,
-     *     destination_amount: float,
-     *     exchange_rate: float
-     * } The conversion result including source and destination amounts and the exchange rate used
-     * 
-     * @throws CurrencyNotFoundException If either currency code is not supported
-     */
-    public function convert(string $sourceCurrency, string $destinationCurrency, float $sourceAmount): array
-    {
-        $exchangeRate = $this->getRate($sourceCurrency, $destinationCurrency);
-        $destinationAmount = round($sourceAmount * $exchangeRate, 2);
-
+        // Get the raw rate and round it to 7 decimal places
+        $rate = round($this->getRate($sourceCurrencyCode, $destinationCurrencyCode), 7);
+        
+        // Calculate destination amount using the rounded rate
+        $destinationAmount = $amount * $rate;
+        
+        // Get the number of decimal places for the destination currency
+        $decimalPlaces = Currencies::getFractionDigits($destinationCurrencyCode);
+        
+        // Format the destination amount according to the currency's decimal places
+        $destinationAmount = round($destinationAmount, $decimalPlaces);
+        
         return [
-            'source_currency' => $sourceCurrency,
-            'destination_currency' => $destinationCurrency,
-            'source_amount' => $sourceAmount,
             'destination_amount' => $destinationAmount,
-            'exchange_rate' => $exchangeRate
+            'exchange_rate' => $rate
         ];
     }
 }

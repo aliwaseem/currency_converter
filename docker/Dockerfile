@@ -1,4 +1,4 @@
-# Dockerfile for the Currency Converter PHP application
+# Dockerfile for the Currency Converter application
 # This file defines the services, networks, and volumes for the application.
 ######################################
 # 1. Base Image
@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y \
        intl \
        opcache \
        pdo_mysql \
+       mysqli \
        bcmath \
     && pecl install xdebug \
     && docker-php-ext-enable xdebug \
@@ -37,7 +38,7 @@ COPY --from=composer:2.5 /usr/bin/composer /usr/bin/composer
 # 4. Install Symfony CLI
 ######################################
 RUN curl -sS https://get.symfony.com/cli/installer | bash \
--s -- --install-dir=/usr/local/bin
+    -s -- --install-dir=/usr/local/bin
 
 ######################################
 # 5. Set Working Directory
@@ -64,11 +65,11 @@ RUN a2enmod rewrite
 COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
 
 ######################################
-# 9. Expose Port for Apache
+# 9. Expose Port
 ######################################
 EXPOSE 80
 
 ######################################
-# 10. Default Command: Start Apache
+# 10. Start Apache in foreground
 ######################################
 CMD ["apache2-foreground"]

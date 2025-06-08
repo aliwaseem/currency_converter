@@ -89,19 +89,15 @@ class ConversionController extends AbstractController
                 $sourceAmount
             );
 
-            // Set the result in the DTO
-            $dto->destinationAmount = $result['destination_amount'];
-            $dto->exchangeRate = $result['exchange_rate'];
-
             return $this->json([
                 'status' => 'success',
                 'code' => Response::HTTP_OK,
                 'data' => [
-                    'source_currency' => $dto->sourceCurrency,
-                    'destination_currency' => $dto->destinationCurrency,
-                    'source_amount' => $dto->sourceAmount,
-                    'destination_amount' => $dto->destinationAmount,
-                    'exchange_rate' => $dto->exchangeRate
+                    'source_currency' => $sourceCurrency,
+                    'destination_currency' => $destinationCurrency,
+                    'source_amount' => $sourceAmount,
+                    'destination_amount' => $result['destination_amount'],
+                    'exchange_rate' => $result['exchange_rate']
                 ]
             ], Response::HTTP_OK);
         } catch (CurrencyNotFoundException $e) {
@@ -118,6 +114,4 @@ class ConversionController extends AbstractController
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
-
-
 }
