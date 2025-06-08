@@ -6,6 +6,7 @@ namespace App\Service;
 
 use App\Entity\Currency;
 use App\Entity\ExchangeRate;
+use App\Enum\AppEnum;
 use App\Exception\CurrencyNotFoundException;
 use App\Repository\CurrencyRepository;
 use App\Repository\ExchangeRateRepository;
@@ -50,12 +51,12 @@ class CurrencyConverterService
             $destinationCurrency = $this->currencyRepository->findByCode($destinationCurrencyCode);
             if (!$destinationCurrency) {
                 throw new CurrencyNotFoundException(sprintf('Destination currency "%s" not found', $destinationCurrencyCode));
-        }
+            }
 
             $destinationRate = $this->exchangeRateRepository->findCurrentRate($destinationCurrency);
             if (!$destinationRate) {
                 throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $destinationCurrencyCode));
-        }
+            }
             return (float) $destinationRate->getUnitsPerGbp();
         }
 
@@ -64,14 +65,14 @@ class CurrencyConverterService
             $sourceCurrency = $this->currencyRepository->findByCode($sourceCurrencyCode);
             if (!$sourceCurrency) {
                 throw new CurrencyNotFoundException(sprintf('Source currency "%s" not found', $sourceCurrencyCode));
-        }
+            }
 
             $sourceRate = $this->exchangeRateRepository->findCurrentRate($sourceCurrency);
             if (!$sourceRate) {
                 throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $sourceCurrencyCode));
             }
             return 1 / (float) $sourceRate->getUnitsPerGbp();
-    }
+        }
 
         // Get source currency
         $sourceCurrency = $this->currencyRepository->findByCode($sourceCurrencyCode);
@@ -116,8 +117,8 @@ class CurrencyConverterService
             throw new InvalidArgumentException('Amount must be positive');
         }
 
-        // Get the raw rate and round it to 7 decimal places
-        $rate = round($this->getRate($sourceCurrencyCode, $destinationCurrencyCode), 7);
+        // Get the raw rate and round it to display precision
+        $rate = round($this->getRate($sourceCurrencyCode, $destinationCurrencyCode), AppEnum::RATE_PRECISION->value);
         
         // Calculate destination amount using the rounded rate
         $destinationAmount = $amount * $rate;

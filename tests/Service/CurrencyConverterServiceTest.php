@@ -1,5 +1,7 @@
 <?php
 
+// src/Tests/Service/CurrencyConverterServiceTest.php
+
 namespace App\Tests\Service;
 
 use App\Entity\Currency;
@@ -13,6 +15,21 @@ use Psr\Log\LoggerInterface;
 use DateTime;
 use InvalidArgumentException;
 
+/**
+ * Unit tests for the CurrencyConverterService.
+ * 
+ * This test suite verifies the currency conversion logic, including:
+ * - Rate calculations between different currencies
+ * - GBP as source or destination currency
+ * - Handling of different decimal places
+ * - Error cases (currency not found, missing rates)
+ * - Edge cases (large/small amounts, precision)
+ * 
+ * @property CurrencyRepository $currencyRepository Mock repository for currencies
+ * @property ExchangeRateRepository $exchangeRateRepository Mock repository for exchange rates
+ * @property LoggerInterface $logger Mock logger
+ * @property CurrencyConverterService $service The service being tested
+ */
 class CurrencyConverterServiceTest extends TestCase
 {
     private CurrencyRepository $currencyRepository;
@@ -20,6 +37,13 @@ class CurrencyConverterServiceTest extends TestCase
     private LoggerInterface $logger;
     private CurrencyConverterService $service;
 
+    /**
+     * Set up the test environment before each test.
+     * 
+     * Initializes mock objects for dependencies and creates the service instance.
+     * 
+     * @return void
+     */
     protected function setUp(): void
     {
         $this->currencyRepository = $this->createMock(CurrencyRepository::class);
@@ -33,6 +57,13 @@ class CurrencyConverterServiceTest extends TestCase
         );
     }
 
+    /**
+     * Test rate calculation between two non-GBP currencies.
+     * 
+     * Verifies that the rate is correctly calculated using GBP as the base currency.
+     * 
+     * @return void
+     */
     public function testGetRateBetweenNonGbpCurrencies(): void
     {
         // Setup test data
@@ -70,6 +101,13 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(0.92, $rate, 0.0000001); // 1.15/1.25
     }
 
+    /**
+     * Test rate calculation when GBP is the source currency.
+     * 
+     * Verifies that the rate is correctly calculated when converting from GBP.
+     * 
+     * @return void
+     */
     public function testGetRateWithGbpAsSource(): void
     {
         // Setup test data
@@ -97,6 +135,13 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(1.15, $rate, 0.0000001);
     }
 
+    /**
+     * Test rate calculation when GBP is the destination currency.
+     * 
+     * Verifies that the rate is correctly calculated when converting to GBP.
+     * 
+     * @return void
+     */
     public function testGetRateWithGbpAsDestination(): void
     {
         // Setup test data
@@ -124,6 +169,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(0.8, $rate, 0.0000001); // 1/1.25
     }
 
+    /**
+     * Test conversion between currencies with different decimal places.
+     * 
+     * Verifies that amounts are correctly rounded according to the destination currency's
+     * decimal places (e.g., JPY has 0 decimal places).
+     * 
+     * @return void
+     */
     public function testConvertWithDifferentDecimalPlaces(): void
     {
         // Setup test data
@@ -162,6 +215,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(120.0000000, $result['exchange_rate'], 0.0000001);
     }
 
+    /**
+     * Test handling of non-existent currency.
+     * 
+     * Verifies that a CurrencyNotFoundException is thrown when the source currency
+     * does not exist in the database.
+     * 
+     * @return void
+     */
     public function testCurrencyNotFound(): void
     {
         // Configure mocks
@@ -177,6 +238,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->service->getRate('XXX', 'USD');
     }
 
+    /**
+     * Test handling of missing exchange rate.
+     * 
+     * Verifies that a CurrencyNotFoundException is thrown when no current
+     * exchange rate is found for a currency.
+     * 
+     * @return void
+     */
     public function testNoCurrentRateFound(): void
     {
         // Setup test data
@@ -203,6 +272,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->service->getRate('USD', 'EUR');
     }
 
+    /**
+     * Test conversion with a large amount.
+     * 
+     * Verifies that the service can handle large amounts without precision loss
+     * or floating-point overflow.
+     * 
+     * @return void
+     */
     public function testConvertWithLargeAmount(): void
     {
         // Setup test data
@@ -241,6 +318,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(0.9200000, $result['exchange_rate'], 0.0000001);
     }
 
+    /**
+     * Test conversion with a small amount.
+     * 
+     * Verifies that the service correctly handles small amounts and rounds
+     * according to the destination currency's decimal places.
+     * 
+     * @return void
+     */
     public function testConvertWithSmallAmount(): void
     {
         // Setup test data
@@ -279,6 +364,14 @@ class CurrencyConverterServiceTest extends TestCase
         $this->assertEqualsWithDelta(120.0000000, $result['exchange_rate'], 0.0000001);
     }
 
+    /**
+     * Test rate precision and consistency.
+     * 
+     * Verifies that the exchange rate remains consistent across multiple
+     * conversions and that amounts are proportional to the source amount.
+     * 
+     * @return void
+     */
     public function testGetRatePrecision(): void
     {
         // Setup test data
@@ -325,6 +418,14 @@ class CurrencyConverterServiceTest extends TestCase
         );
     }
 
+    /**
+     * Test conversion with maximum float value.
+     * 
+     * Verifies that the service can handle PHP_FLOAT_MAX without overflow
+     * and maintains precision.
+     * 
+     * @return void
+     */
     public function testConvertWithMaximumFloatValue(): void
     {
         // Setup test data

@@ -11,6 +11,7 @@
         "doctrine/doctrine-bundle": "^2.14",
         "doctrine/doctrine-migrations-bundle": "^3.4",
         "doctrine/orm": "^3.3",
+        "guzzlehttp/guzzle": "^7.9",
         "league/csv": "^9.23",
         "nelmio/cors-bundle": "^2.5",
         "phpdocumentor/reflection-docblock": "^5.6",
@@ -86,6 +87,7 @@
     "require-dev": {
         "doctrine/doctrine-fixtures-bundle": "^4.1",
         "phpunit/phpunit": "^11.5",
+        "symfony/browser-kit": "7.3.*",
         "symfony/maker-bundle": "^1.63"
     }
 }
