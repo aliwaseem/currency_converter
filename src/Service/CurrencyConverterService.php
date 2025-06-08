@@ -11,6 +11,7 @@ use App\Repository\CurrencyRepository;
 use App\Repository\ExchangeRateRepository;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Intl\Currencies;
+use InvalidArgumentException;
 
 /**
  * Service for handling currency conversions using exchange rates from the database.
@@ -43,6 +44,35 @@ class CurrencyConverterService
             'time' => (new \DateTime())->format('Y-m-d H:i:s')
         ]);
 
+        // Special handling for GBP
+        if ($sourceCurrencyCode === 'GBP') {
+            // Get destination currency
+            $destinationCurrency = $this->currencyRepository->findByCode($destinationCurrencyCode);
+            if (!$destinationCurrency) {
+                throw new CurrencyNotFoundException(sprintf('Destination currency "%s" not found', $destinationCurrencyCode));
+        }
+
+            $destinationRate = $this->exchangeRateRepository->findCurrentRate($destinationCurrency);
+            if (!$destinationRate) {
+                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $destinationCurrencyCode));
+        }
+            return (float) $destinationRate->getUnitsPerGbp();
+        }
+
+        if ($destinationCurrencyCode === 'GBP') {
+            // Get source currency
+            $sourceCurrency = $this->currencyRepository->findByCode($sourceCurrencyCode);
+            if (!$sourceCurrency) {
+                throw new CurrencyNotFoundException(sprintf('Source currency "%s" not found', $sourceCurrencyCode));
+        }
+
+            $sourceRate = $this->exchangeRateRepository->findCurrentRate($sourceCurrency);
+            if (!$sourceRate) {
+                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $sourceCurrencyCode));
+            }
+            return 1 / (float) $sourceRate->getUnitsPerGbp();
+    }
+
         // Get source currency
         $sourceCurrency = $this->currencyRepository->findByCode($sourceCurrencyCode);
         if (!$sourceCurrency) {
@@ -53,23 +83,6 @@ class CurrencyConverterService
         $destinationCurrency = $this->currencyRepository->findByCode($destinationCurrencyCode);
         if (!$destinationCurrency) {
             throw new CurrencyNotFoundException(sprintf('Destination currency "%s" not found', $destinationCurrencyCode));
-        }
-
-        // Special handling for GBP
-        if ($sourceCurrencyCode === 'GBP') {
-            $destinationRate = $this->exchangeRateRepository->findCurrentRate($destinationCurrency);
-            if (!$destinationRate) {
-                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $destinationCurrencyCode));
-            }
-            return (float) $destinationRate->getUnitsPerGbp();
-        }
-
-        if ($destinationCurrencyCode === 'GBP') {
-            $sourceRate = $this->exchangeRateRepository->findCurrentRate($sourceCurrency);
-            if (!$sourceRate) {
-                throw new CurrencyNotFoundException(sprintf('No current rate found for %s', $sourceCurrencyCode));
-            }
-            return 1 / (float) $sourceRate->getUnitsPerGbp();
         }
 
         // Get rates for both currencies
@@ -89,15 +102,20 @@ class CurrencyConverterService
 
     /**
      * Convert an amount from one currency to another.
-     *
+     * 
      * @param string $sourceCurrencyCode The source currency code
      * @param string $destinationCurrencyCode The destination currency code
      * @param float $amount The amount to convert
      * @return array{destination_amount: float, exchange_rate: float} Array containing the converted amount and the exchange rate used
      * @throws CurrencyNotFoundException If either currency is not found
+     * @throws InvalidArgumentException If the amount is negative
      */
     public function convert(string $sourceCurrencyCode, string $destinationCurrencyCode, float $amount): array
     {
+        if ($amount < 0) {
+            throw new InvalidArgumentException('Amount must be positive');
+        }
+
         // Get the raw rate and round it to 7 decimal places
         $rate = round($this->getRate($sourceCurrencyCode, $destinationCurrencyCode), 7);
         
@@ -109,7 +127,7 @@ class CurrencyConverterService
         
         // Format the destination amount according to the currency's decimal places
         $destinationAmount = round($destinationAmount, $decimalPlaces);
-        
+
         return [
             'destination_amount' => $destinationAmount,
             'exchange_rate' => $rate

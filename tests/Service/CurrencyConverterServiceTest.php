@@ -2,78 +2,365 @@
 
 namespace App\Tests\Service;
 
+use App\Entity\Currency;
+use App\Entity\ExchangeRate;
 use App\Exception\CurrencyNotFoundException;
+use App\Repository\CurrencyRepository;
+use App\Repository\ExchangeRateRepository;
 use App\Service\CurrencyConverterService;
 use PHPUnit\Framework\TestCase;
-use Symfony\Component\Filesystem\Filesystem;
+use Psr\Log\LoggerInterface;
+use DateTime;
+use InvalidArgumentException;
 
 class CurrencyConverterServiceTest extends TestCase
 {
-    private string $testRatesFile;
-    private Filesystem $filesystem;
+    private CurrencyRepository $currencyRepository;
+    private ExchangeRateRepository $exchangeRateRepository;
+    private LoggerInterface $logger;
+    private CurrencyConverterService $service;
 
     protected function setUp(): void
     {
-        $this->filesystem = new Filesystem();
-        $this->testRatesFile = sys_get_temp_dir() . '/test_rates.csv';
+        $this->currencyRepository = $this->createMock(CurrencyRepository::class);
+        $this->exchangeRateRepository = $this->createMock(ExchangeRateRepository::class);
+        $this->logger = $this->createMock(LoggerInterface::class);
         
-        // Create a test CSV file with sample rates
-        $this->filesystem->dumpFile($this->testRatesFile, <<<CSV
-            Currency Code,Currency units per �1
-            USD,1.25
-            EUR,1.15
-            JPY,150.00
-            GBP,1.00
-            CAD,1.50
-            CSV
+        $this->service = new CurrencyConverterService(
+            $this->currencyRepository,
+            $this->exchangeRateRepository,
+            $this->logger
         );
     }
 
-    protected function tearDown(): void
+    public function testGetRateBetweenNonGbpCurrencies(): void
     {
-        // Clean up the test file
-        $this->filesystem->remove($this->testRatesFile);
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $eur = new Currency();
+        $eur->setCode('EUR');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $eurRate = new ExchangeRate();
+        $eurRate->setUnitsPerGbp('1.15000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['EUR', $eur]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(2))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$eur, $eurRate]
+            ]);
+        
+        // Test
+        $rate = $this->service->getRate('USD', 'EUR');
+        
+        // Assert
+        $this->assertEqualsWithDelta(0.92, $rate, 0.0000001); // 1.15/1.25
     }
 
-    public function testSuccessfulConversion(): void
+    public function testGetRateWithGbpAsSource(): void
     {
-        $service = new CurrencyConverterService($this->testRatesFile);
+        // Setup test data
+        $eur = new Currency();
+        $eur->setCode('EUR');
         
-        $result = $service->convert('USD', 'EUR', 100.00);
+        $eurRate = new ExchangeRate();
+        $eurRate->setUnitsPerGbp('1.15000000');
         
-        $this->assertEquals('USD', $result['source_currency']);
-        $this->assertEquals('EUR', $result['destination_currency']);
-        $this->assertEquals(100.00, $result['source_amount']);
-        $this->assertEquals(92.00, $result['destination_amount']); // 100 * (1.15/1.25)
-        $this->assertEqualsWithDelta(0.92, $result['exchange_rate'], 0.00001);
+        // Configure mocks
+        $this->currencyRepository->expects($this->once())
+            ->method('findByCode')
+            ->with('EUR')
+            ->willReturn($eur);
+            
+        $this->exchangeRateRepository->expects($this->once())
+            ->method('findCurrentRate')
+            ->with($eur)
+            ->willReturn($eurRate);
+        
+        // Test
+        $rate = $this->service->getRate('GBP', 'EUR');
+        
+        // Assert
+        $this->assertEqualsWithDelta(1.15, $rate, 0.0000001);
+    }
+
+    public function testGetRateWithGbpAsDestination(): void
+    {
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->once())
+            ->method('findByCode')
+            ->with('USD')
+            ->willReturn($usd);
+            
+        $this->exchangeRateRepository->expects($this->once())
+            ->method('findCurrentRate')
+            ->with($usd)
+            ->willReturn($usdRate);
+        
+        // Test
+        $rate = $this->service->getRate('USD', 'GBP');
+        
+        // Assert
+        $this->assertEqualsWithDelta(0.8, $rate, 0.0000001); // 1/1.25
+    }
+
+    public function testConvertWithDifferentDecimalPlaces(): void
+    {
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $jpy = new Currency();
+        $jpy->setCode('JPY');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $jpyRate = new ExchangeRate();
+        $jpyRate->setUnitsPerGbp('150.00000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['JPY', $jpy]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(2))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$jpy, $jpyRate]
+            ]);
+        
+        // Test
+        $result = $this->service->convert('USD', 'JPY', 100.00);
+        
+        // Assert
+        $this->assertEquals(12000, $result['destination_amount']); // JPY has 0 decimal places
+        $this->assertEqualsWithDelta(120.0000000, $result['exchange_rate'], 0.0000001);
     }
 
     public function testCurrencyNotFound(): void
     {
-        $service = new CurrencyConverterService($this->testRatesFile);
+        // Configure mocks
+        $this->currencyRepository->expects($this->once())
+            ->method('findByCode')
+            ->with('XXX')
+            ->willReturn(null);
         
+        // Test and assert
         $this->expectException(CurrencyNotFoundException::class);
-        $this->expectExceptionMessage('Currency not found: XXX or ABC');
+        $this->expectExceptionMessage('Source currency "XXX" not found');
         
-        $service->convert('XXX', 'ABC', 100.00);
+        $this->service->getRate('XXX', 'USD');
     }
 
-    public function testInvalidRatesFile(): void
+    public function testNoCurrentRateFound(): void
     {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Exchange rates file not found: /nonexistent/file.csv');
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
         
-        new CurrencyConverterService('/nonexistent/file.csv');
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['EUR', new Currency()]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->once())
+            ->method('findCurrentRate')
+            ->with($usd)
+            ->willReturn(null);
+        
+        // Test and assert
+        $this->expectException(CurrencyNotFoundException::class);
+        $this->expectExceptionMessage('No current rate found for USD');
+        
+        $this->service->getRate('USD', 'EUR');
     }
 
-    public function testInvalidCsvFormat(): void
+    public function testConvertWithLargeAmount(): void
     {
-        // Create a malformed CSV file
-        $this->filesystem->dumpFile($this->testRatesFile, "Invalid,Format\nNo,Currency,Code");
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
         
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Required columns not found in CSV file');
+        $eur = new Currency();
+        $eur->setCode('EUR');
         
-        new CurrencyConverterService($this->testRatesFile);
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $eurRate = new ExchangeRate();
+        $eurRate->setUnitsPerGbp('1.15000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['EUR', $eur]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(2))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$eur, $eurRate]
+            ]);
+        
+        // Test with a large amount
+        $result = $this->service->convert('USD', 'EUR', 1000000.00);
+        
+        // Assert
+        $this->assertEquals(920000.00, $result['destination_amount']);
+        $this->assertEqualsWithDelta(0.9200000, $result['exchange_rate'], 0.0000001);
+    }
+
+    public function testConvertWithSmallAmount(): void
+    {
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $jpy = new Currency();
+        $jpy->setCode('JPY');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $jpyRate = new ExchangeRate();
+        $jpyRate->setUnitsPerGbp('150.00000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['JPY', $jpy]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(2))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$jpy, $jpyRate]
+            ]);
+        
+        // Test with a small amount
+        $result = $this->service->convert('USD', 'JPY', 0.01);
+        
+        // Assert
+        $this->assertEquals(1, $result['destination_amount']); // JPY rounds to whole numbers
+        $this->assertEqualsWithDelta(120.0000000, $result['exchange_rate'], 0.0000001);
+    }
+
+    public function testGetRatePrecision(): void
+    {
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $eur = new Currency();
+        $eur->setCode('EUR');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $eurRate = new ExchangeRate();
+        $eurRate->setUnitsPerGbp('1.15000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(4))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['EUR', $eur]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(4))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$eur, $eurRate]
+            ]);
+        
+        // Test multiple conversions with same rate
+        $result1 = $this->service->convert('USD', 'EUR', 100.00);
+        $result2 = $this->service->convert('USD', 'EUR', 200.00);
+        
+        // Assert rate is consistent
+        $this->assertEqualsWithDelta($result1['exchange_rate'], $result2['exchange_rate'], 0.0000001);
+        $this->assertEqualsWithDelta(0.9200000, $result1['exchange_rate'], 0.0000001);
+        
+        // Assert amounts are proportional
+        $this->assertEqualsWithDelta(
+            $result1['destination_amount'] * 2,
+            $result2['destination_amount'],
+            0.0000001
+        );
+    }
+
+    public function testConvertWithMaximumFloatValue(): void
+    {
+        // Setup test data
+        $usd = new Currency();
+        $usd->setCode('USD');
+        
+        $eur = new Currency();
+        $eur->setCode('EUR');
+        
+        $usdRate = new ExchangeRate();
+        $usdRate->setUnitsPerGbp('1.25000000');
+        
+        $eurRate = new ExchangeRate();
+        $eurRate->setUnitsPerGbp('1.15000000');
+        
+        // Configure mocks
+        $this->currencyRepository->expects($this->exactly(2))
+            ->method('findByCode')
+            ->willReturnMap([
+                ['USD', $usd],
+                ['EUR', $eur]
+            ]);
+            
+        $this->exchangeRateRepository->expects($this->exactly(2))
+            ->method('findCurrentRate')
+            ->willReturnMap([
+                [$usd, $usdRate],
+                [$eur, $eurRate]
+            ]);
+        
+        // Test with PHP_FLOAT_MAX
+        $result = $this->service->convert('USD', 'EUR', PHP_FLOAT_MAX);
+        
+        // Assert
+        $this->assertIsFloat($result['destination_amount']);
+        $this->assertTrue(is_finite($result['destination_amount']));
+        $this->assertEqualsWithDelta(0.9200000, $result['exchange_rate'], 0.0000001);
     }
 } 

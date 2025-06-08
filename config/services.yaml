@@ -26,3 +26,8 @@ services:
     # CurrencyConverterService
     # This service provides methods to convert amounts between different currencies
     # using exchange rates from the database.
+
+    # Register our payload error event subscriber
+    App\EventSubscriber\PayloadErrorEventSubscriber:
+        tags:
+            - { name: kernel.event_subscriber }

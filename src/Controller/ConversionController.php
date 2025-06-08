@@ -4,16 +4,15 @@
 
 namespace App\Controller;
 
-use App\Dto\ConversionRequest;
-use App\Service\CurrencyConverterService;
+use App\Dto\ConversionDto;
 use App\Exception\CurrencyNotFoundException;
+use App\Service\CurrencyConverterService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\ObjectMapper\ObjectMapperInterface;
 use Symfony\Component\Routing\Annotation\Route;
-use Symfony\Component\Serializer\SerializerInterface;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 
 /**
  * Controller for handling currency conversion requests.
@@ -21,18 +20,18 @@ use Symfony\Component\Validator\Validator\ValidatorInterface;
  * This controller provides an endpoint for converting amounts between different currencies.
  * It handles request validation, currency conversion, and error responses.
  */
+#[Route('/api/v1')]
 class ConversionController extends AbstractController
 {
     /**
-     * @param CurrencyConverterService $currencyConverter Service for performing currency conversions
-     * @param SerializerInterface $serializer Service for deserializing JSON requests
-     * @param ValidatorInterface $validator Service for validating request data
+     * @param CurrencyConverterService $converter Service for performing currency conversions
+     * @param ObjectMapperInterface $objectMapper Service for mapping conversion results to DTOs
      */
     public function __construct(
-        private CurrencyConverterService $currencyConverter,
-        private SerializerInterface $serializer,
-        private ValidatorInterface $validator
-    ) {}
+        private readonly CurrencyConverterService $converter,
+        private readonly ObjectMapperInterface $objectMapper
+    ) {
+    }
 
     /**
      * Converts an amount from one currency to another.
@@ -42,7 +41,7 @@ class ConversionController extends AbstractController
      * - destinationCurrency: The currency code to convert to (e.g., "EUR")
      * - sourceAmount: The amount to convert
      * 
-     * @param Request $request The HTTP request containing the conversion parameters
+     * @param Request $request The HTTP request object
      * 
      * @return JsonResponse A JSON response containing:
      *                      - On success: The converted amount and exchange rate
@@ -52,65 +51,30 @@ class ConversionController extends AbstractController
      * 
      * @throws CurrencyNotFoundException When either currency code is not supported
      */
-    #[Route('/api/convert', name: 'api_convert', methods: ['POST'])]
-    public function convert(Request $request): JsonResponse
+    #[Route('/convert', name: 'api_convert', methods: ['POST'])]
+    public function convert(#[MapRequestPayload] ConversionDto $dto): JsonResponse
     {
         try {
-            // Deserialize the request body into the DTO
-            $dto = $this->serializer->deserialize(
-                $request->getContent(),
-                ConversionRequest::class,
-                'json'
-            );
-
-            // Validate the DTO
-            $violations = $this->validator->validate($dto);
-            if (count($violations) > 0) {
-                $errors = [];
-                foreach ($violations as $violation) {
-                    $errors[$violation->getPropertyPath()] = $violation->getMessage();
-                }
-                return $this->json([
-                    'status' => 'error',
-                    'code' => Response::HTTP_BAD_REQUEST,
-                    'message' => 'Validation failed',
-                    'errors' => $errors
-                ], Response::HTTP_BAD_REQUEST);
-            }
-
             // Perform the conversion
-            $sourceCurrency = strtoupper($dto->sourceCurrency);
-            $destinationCurrency = strtoupper($dto->destinationCurrency);
-            $sourceAmount = $dto->sourceAmount;
-
-            $result = $this->currencyConverter->convert(
-                $sourceCurrency,
-                $destinationCurrency,
-                $sourceAmount
+            $result = $this->converter->convert(
+                $dto->sourceCurrency,
+                $dto->destinationCurrency,
+                $dto->sourceAmount
             );
 
-            return $this->json([
-                'status' => 'success',
-                'code' => Response::HTTP_OK,
-                'data' => [
-                    'source_currency' => $sourceCurrency,
-                    'destination_currency' => $destinationCurrency,
-                    'source_amount' => $sourceAmount,
-                    'destination_amount' => $result['destination_amount'],
-                    'exchange_rate' => $result['exchange_rate']
-                ]
-            ], Response::HTTP_OK);
+            // Update the DTO with the result values
+            $dto->destinationAmount = $result['destination_amount'];
+            $dto->exchangeRate = $result['exchange_rate'];
+
+            return $this->json($dto, Response::HTTP_OK);
         } catch (CurrencyNotFoundException $e) {
             return $this->json([
-                'status' => 'error',
-                'code' => Response::HTTP_NOT_FOUND,
                 'message' => $e->getMessage()
             ], Response::HTTP_NOT_FOUND);
-        } catch (\Throwable $e) {
+        } catch (\Exception $e) {
             return $this->json([
-                'status' => 'error',
-                'code' => Response::HTTP_INTERNAL_SERVER_ERROR,
-                'message' => 'An unexpected error occurred'
+                'message' => 'An unexpected error occurred',
+                'error' => $e->getMessage()
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
